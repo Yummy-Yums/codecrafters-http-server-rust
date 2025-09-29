@@ -14,7 +14,9 @@ fn main() {
         match stream {
             Ok(stream) => {
                 println!("accepted new connection");
-                handle_get_request(stream);
+                std::thread::spawn(|| {
+                    handle_get_user_agent_request(stream);
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -60,7 +62,6 @@ fn handle_get_request(mut stream: TcpStream) {
 
     loop {
         let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
-        println!("read {} bytes", bytes_read);
 
         let mut info: Vec<&str> = std::str::from_utf8(&buf[..bytes_read])
             .unwrap()
@@ -68,9 +69,7 @@ fn handle_get_request(mut stream: TcpStream) {
             .collect();
 
         info.retain(|s| !s.is_empty());
-        let info_len = info.len();
 
-        println!("info: {:?} {}", info, info_len);
         let mut http_response = info[0].split_whitespace();
         let _ =  http_response.next();
         let path = http_response.next().unwrap();
@@ -103,6 +102,57 @@ fn handle_get_request(mut stream: TcpStream) {
 
                 break;
             }
+        } else {
+            let response = format!("HTTP/1.1 404 Not Found\r\n\r\n");
+            stream.write(response.as_bytes()).expect("Failed to write to server");
+            break;
+        }
+
+    }
+}
+
+fn handle_get_user_agent_request(mut stream: TcpStream) {
+    let mut buf = [0; 1024];
+
+    loop {
+        let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
+
+        let mut info: Vec<&str> = std::str::from_utf8(&buf[..bytes_read])
+            .unwrap()
+            .split("\r\n")
+            .collect();
+
+        info.retain(|s| !s.is_empty());
+        println!("info {:?}", info);
+
+        let mut http_response = info[0].split_whitespace();
+        let _ =  http_response.next();
+        let path = http_response.next().unwrap();
+
+        if path.contains("/user-agent"){
+
+            let content = info.last().cloned().unwrap().split_whitespace().last().unwrap();
+
+            if bytes_read == 0 {
+                return ;
+            }
+
+            let http_header = "HTTP/1.1  200 OK\r\n";
+            let content_length_header = format!("Content-Length: {}\r\n", bytes_read);
+
+            let response = format!(
+                "{}{}Content-Type: text/plain\r\n\r\n{}",
+                http_header,
+                content_length_header,
+                content
+            );
+
+            stream
+                .write_all(response.as_bytes())
+                .expect("Failed to write to server");
+
+            break;
+
         } else {
             let response = format!("HTTP/1.1 404 Not Found\r\n\r\n");
             stream.write(response.as_bytes()).expect("Failed to write to server");
