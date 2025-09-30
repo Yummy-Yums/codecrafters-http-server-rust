@@ -16,7 +16,7 @@ fn main() {
             Ok(stream) => {
                 println!("accepted new connection");
                 std::thread::spawn(|| {
-                    handle_returns_a_file(stream);
+                    handle_read_request_body(stream);
                 });
             }
             Err(e) => {
@@ -163,10 +163,8 @@ fn handle_get_user_agent_request(mut stream: TcpStream) {
     }
 }
 
-
 fn handle_returns_a_file(mut stream: TcpStream) {
     let mut buf = [0; 1024];
-
 
     loop {
         let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
@@ -188,7 +186,7 @@ fn handle_returns_a_file(mut stream: TcpStream) {
         let path = http_response.next().unwrap();
 
 
-        if path.contains("/files"){
+        if path.starts_with("/files"){
 
             let filename_from_path = path.split_inclusive("/files").into_iter().last();
 
@@ -243,3 +241,67 @@ fn handle_returns_a_file(mut stream: TcpStream) {
 
     }
 }
+
+fn handle_read_request_body(mut stream: TcpStream) {
+
+    let mut buf = [0; 1024];
+
+    loop {
+        let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
+
+        if bytes_read == 0 {
+            return ;
+        }
+
+        let mut info: Vec<&str> = std::str::from_utf8(&buf[..bytes_read])
+            .unwrap()
+            .split("\r\n")
+            .collect();
+
+        info.retain(|s| !s.is_empty());
+
+        let mut http_response = info[0].split_whitespace();
+        let _ =  http_response.next();
+        let path = http_response.next().unwrap();
+
+        let body = info.last().unwrap();
+
+        if path.starts_with("/files"){
+
+            let filename_from_path = path
+                .split_inclusive("/files")
+                .into_iter()
+                .last();
+
+            if filename_from_path == Some("/") {
+                let http_header = "HTTP/1.1 404 Not Found\r\n\r\n";
+                let response = format!("{}\r\nempty filename, please specify filename", http_header);
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("Failed to write to server");
+                return;
+            }
+
+            let file_path = PathBuf::from(filename_from_path.unwrap());
+            let temp_path = std::env::temp_dir();
+            let temp_file = temp_path.join(file_path.file_name().unwrap());
+
+            std::fs::write(temp_file, body).expect("Failed to write contents");
+
+            let response = "HTTP/1.1 201 Created\r\n\r\n";
+
+            stream
+                .write_all(response.as_bytes())
+                .expect("Failed to write to server");
+
+            return;
+
+        } else {
+            let response = format!("HTTP/1.1 404 Not Found\r\n\r\n");
+            stream.write(response.as_bytes()).expect("Failed to write to server");
+            return;
+        }
+    }
+}
+
+fn
