@@ -16,7 +16,7 @@ fn main() {
             Ok(stream) => {
                 println!("accepted new connection");
                 std::thread::spawn(|| {
-                    handle_read_request_body(stream);
+                    handle_compression_headers(stream);
                 });
             }
             Err(e) => {
@@ -304,4 +304,52 @@ fn handle_read_request_body(mut stream: TcpStream) {
     }
 }
 
-fn
+fn handle_compression_headers(mut stream: TcpStream) {
+    let mut buf = [0; 1024];
+
+    loop {
+        let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
+
+        if bytes_read == 0 {
+            return ;
+        }
+
+        let mut info= std::str::from_utf8(&buf[..bytes_read])
+            .unwrap();
+
+        let accept_encoding = info.
+            lines()
+            .find(|line| line.starts_with("Accept-Encoding: "))
+            .and_then(|line| line.split(":").nth(1)
+            .map(|s| s.trim().to_string()))
+            .unwrap_or("".to_string());
+        println!("body {:?}", accept_encoding);
+        let content_type = "Content-Type: text/plain\r\n";
+        let http_header = "HTTP/1.1 200 OK\r\n";
+
+        let response = if accept_encoding.contains("gzip") {
+            let encoding = "Content-Encoding: gzip\r\n";
+            format!(
+                "{}{}{}\r\n",
+                http_header,
+                encoding,
+                content_type,
+            )
+
+        } else {
+            format!(
+                "{}{}",
+                http_header,
+                content_type
+            )
+
+        };
+
+        stream
+            .write_all(response.as_bytes())
+            .expect("Failed to write to server");
+
+        return;
+
+    }
+}
