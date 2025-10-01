@@ -508,14 +508,16 @@ fn handle_persistent_connection(mut stream: TcpStream) {
 
             (headers, body_bytes)
         };
-
+        stream.write_all(response_headers.as_bytes());
         // Send response
-        if stream.write_all(response_headers.as_bytes()).is_err() {
-            break;
-        }
-        if stream.write_all(&body).is_err() {
-            break;
-        }
+        // if stream.write_all(response_headers.as_bytes()).is_err() {
+        //     break;
+        // }
+        stream.write_all(&body);
+        // if stream.write_all(&body).is_err() {
+        //     break;
+        // }
+        stream.flush();
 
         // Close connection if requested
         if should_close {
