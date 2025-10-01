@@ -16,7 +16,7 @@ fn main() {
             Ok(stream) => {
                 println!("accepted new connection");
                 std::thread::spawn(|| {
-                    handle_gzip_headers(stream);
+                    handle_persistent_connection(stream);
                 });
             }
             Err(e) => {
@@ -433,3 +433,99 @@ fn compress_data(data: &str) -> Vec<u8> {
     encoder.write_all(data.as_bytes()).unwrap();
     encoder.finish().unwrap()
 }
+
+fn handle_persistent_connection(mut stream: TcpStream) {
+    loop {
+        let mut buf = [0; 1024];
+
+        // Try to read a request
+        let bytes_read = match stream.read(&mut buf) {
+            Ok(0) => break, // Connection closed by client
+            Ok(n) => n,
+            Err(_) => break, // Error reading
+        };
+
+        let request_str = std::str::from_utf8(&buf[..bytes_read]).unwrap();
+        println!("Raw request:\n{}", request_str);
+
+        // Check if client wants to close connection
+        let should_close = request_str
+            .lines()
+            .any(|line| line.to_lowercase().contains("connection: close"));
+
+        // Extract path
+        let path = request_str
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("");
+
+        // Determine content based on the route
+        let content = if path == "/user-agent" {
+            request_str
+                .lines()
+                .find(|line| line.to_lowercase().starts_with("user-agent:"))
+                .and_then(|line| line.split(':').nth(1))
+                .map(|s| s.trim())
+                .unwrap_or("default")
+        } else if let Some(echo_content) = path.strip_prefix("/echo/") {
+            echo_content
+        } else {
+            "default"
+        };
+
+        // Parse Accept-Encoding header
+        let accept_encoding = request_str
+            .lines()
+            .find(|line| line.to_lowercase().starts_with("accept-encoding:"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or_default();
+
+        let (response_headers, body) = if accept_encoding.contains("gzip") {
+            let compressed_body = compress_data(content);
+
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Encoding: gzip\r\n\
+                 Content-Type: text/plain\r\n\
+                 Content-Length: {}\r\n\
+                 \r\n",
+                compressed_body.len()
+            );
+
+            (headers, compressed_body)
+        } else {
+            let body_bytes = content.as_bytes().to_vec();
+
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: text/plain\r\n\
+                 Content-Length: {}\r\n\
+                 \r\n",
+                body_bytes.len()
+            );
+
+            (headers, body_bytes)
+        };
+
+        // Send response
+        if stream.write_all(response_headers.as_bytes()).is_err() {
+            break;
+        }
+        if stream.write_all(&body).is_err() {
+            break;
+        }
+
+        // Close connection if requested
+        if should_close {
+            break;
+        }
+
+        // Continue loop to handle next request on same connection
+    }
+}
+
+//
+
+//
