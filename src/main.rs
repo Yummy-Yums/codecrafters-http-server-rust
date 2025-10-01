@@ -16,7 +16,7 @@ fn main() {
             Ok(stream) => {
                 println!("accepted new connection");
                 std::thread::spawn(|| {
-                    handle_compression_headers(stream);
+                    handle_gzip_headers(stream);
                 });
             }
             Err(e) => {
@@ -320,30 +320,33 @@ fn handle_compression_headers(mut stream: TcpStream) {
         let accept_encoding = info.
             lines()
             .find(|line| line.starts_with("Accept-Encoding: "))
-            .and_then(|line| line.split(":").nth(1)
-            .map(|s| s.trim().to_string()))
+            .and_then(|line| line
+                .split(":")
+                .nth(1)
+                .map(|s| s.trim().to_string())
+            )
             .unwrap_or("".to_string());
         println!("body {:?}", accept_encoding);
         let content_type = "Content-Type: text/plain\r\n";
         let http_header = "HTTP/1.1 200 OK\r\n";
 
-        let response = if accept_encoding.contains("gzip") {
-            let encoding = "Content-Encoding: gzip\r\n";
-            format!(
-                "{}{}{}\r\n",
-                http_header,
-                encoding,
-                content_type,
-            )
+        let response =
+            if accept_encoding.contains("gzip") {
+                let encoding = "Content-Encoding: gzip\r\n";
+                format!(
+                    "{}{}{}\r\n",
+                    http_header,
+                    encoding,
+                    content_type,
+                )
+            } else {
+                format!(
+                    "{}{}",
+                    http_header,
+                    content_type
+                )
 
-        } else {
-            format!(
-                "{}{}",
-                http_header,
-                content_type
-            )
-
-        };
+            };
 
         stream
             .write_all(response.as_bytes())
@@ -352,4 +355,81 @@ fn handle_compression_headers(mut stream: TcpStream) {
         return;
 
     }
+}
+
+fn handle_gzip_headers(mut stream: TcpStream) {
+    let mut buf = [0; 1024];
+    let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
+
+    if bytes_read == 0 {
+        return;
+    }
+
+    let request_str = std::str::from_utf8(&buf[..bytes_read]).unwrap();
+
+    // Extract path and content
+    let path = request_str
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("");
+
+    // Correct path extraction - remove "/echo/" prefix
+    let content = path.strip_prefix("/echo/").unwrap_or("default");
+    
+    // Parse Accept-Encoding header
+    let accept_encoding = request_str
+        .lines()
+        .find(|line| line.starts_with("Accept-Encoding:"))
+        .and_then(|line| line.split(':').nth(1))
+        .map(|s| s.trim())
+        .unwrap_or("");
+
+    println!("Accept-Encoding: '{}'", accept_encoding);
+
+    let (response_headers, body) = if accept_encoding.contains("gzip") {
+        // Compress the body
+        let compressed_body = compress_data(content);
+        let content_length = compressed_body.len();
+
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Encoding: gzip\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Length: {}\r\n\
+             \r\n",
+            content_length
+        );
+
+        (headers, compressed_body)  // This should be the COMPRESSED binary data
+    } else {
+        // No compression
+        let body_bytes = content.as_bytes().to_vec();
+        let content_length = body_bytes.len();
+
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Length: {}\r\n\
+             \r\n",
+            content_length
+        );
+
+        (headers, body_bytes)  // This should be the UNCOMPRESSED text
+    };
+
+    println!("Response body: {:?}", body);
+
+    // Send headers + body
+    stream.write_all(response_headers.as_bytes()).unwrap();
+    stream.write_all(&body).unwrap();
+}
+
+use flate2::write::GzEncoder;
+use flate2::Compression;
+
+fn compress_data(data: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data.as_bytes()).unwrap();
+    encoder.finish().unwrap()
 }
